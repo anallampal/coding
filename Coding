@@ -1,0 +1,87 @@
+#import the magic
+from mpl_toolkits.mplot3d import Axes3D
+import numpy as np 
+import os 
+import pandas as pd 
+import matplotlib.pyplot as plt 
+import json 
+import warnings
+warnings.filterwarnings('ignore')
+
+
+
+#reading files
+document = pd.read_csv(r'C:\Users\Pablo Struck\Desktop\Revolut\Relevant Files\doc_reports.csv', delimiter=',',index_col=0)
+document.head(2)
+
+faces = pd.read_csv(r'C:\Users\Pablo Struck\Desktop\Revolut\Relevant Files\facial_similarity_reports.csv', delimiter=',',index_col=0)
+faces.head(2)
+
+#merging the files in order to analyze them
+mb = pd.merge(document, faces, on='attempt_id', how='left', suffixes=('_doc', '_face'))
+mb = mb.drop([ 'user_id_face',  'created_at_face', 'sub_result', 'properties_face',], axis=1)
+mb.head(2)
+#Let's replace all the values with assigned numbers in order to identify which 
+#of the verification stages leads to the "consider or unidentified" option
+mb=mb.replace(["clear","unidentified","consider"],[0,1,1])
+mb.fillna(1, inplace=True)
+
+
+mb.head(2)
+#let´s count how many clear results we have vs (consider + unidentified) results
+mb.result_doc.value_counts().plot.bar()
+#we see a lot more clear results. 
+
+#We are going to analyze the correlation matrix in order to determine which stage is highly correlated to the result_doc and result_face
+data_corr  = mb.corr()
+columns= np.array(mb.columns)
+figure = plt.figure()
+axes = figure.add_subplot(211)
+caxes = axes.matshow(data_corr)
+figure.colorbar(caxes)
+axes.set_xticklabels(columns, rotation=90)
+axes.set_yticklabels(columns)
+plt.show()
+data_corr
+mb.created_at_doc=pd.to_datetime(mb.created_at_doc,format='%Y-%m-%d %H:%M:%S')
+#we see that image_integrity_result is highly correlated to result_doc; and facial_image_integrity_result is highly correlated to result_face
+
+
+#we want to analyze in which period the data increases failure results
+mb.groupby(pd.Grouper(key='created_at_doc', freq='D')).mean().plot()
+plt.legend(loc=1,bbox_to_anchor=(0.1, 0.1,0,.5))
+plt.show
+#we see that "image_integrity_result" has the most failures in october, so we will analyze more data on image integirty result on october
+suspect_data = mb['2017-10-10':'2017-10-25']
+
+#we analyze the data on the column "properties_doc"
+mb.properties_doc = mb.properties_doc.apply(lambda row: row.replace('None', "\"NaN\""))
+mb['properties_doc'] = mb.properties_doc.apply(lambda x: x.strip("\'<>()").replace('\'', '\"'))
+mb['properties_doc'] = mb['properties_doc'].apply(json.loads, strict=False)
+mb = mb.drop('properties_doc', 1).assign(**pd.DataFrame(mb.properties_doc.values.tolist()))
+mb.date_of_expiry = pd.to_datetime(mb.date_of_expiry, errors='coerce', format='%Y-%m-%d')
+mb.issuing_date = pd.to_datetime(mb.issuing_date, errors='coerce', format='%Y-%m')
+mb = mb.set_index(keys='created_at_doc')
+mb.head()
+
+
+#We will analyze failures by issuing country, nationality, doccument type and attempts on image integrity result in order to determine if there is a patron
+#failures by issuing ciuntry
+mb[(mb['result_doc'] == 1) & (mb['image_integrity_result'] == 1)]['issuing_country'].value_counts()[:10].plot(kind='bar', color='y')
+#failures by nationality
+mb[(mb['result_doc'] == 1) & (mb['image_integrity_result'] == 1)]['nationality'].value_counts()[:10].plot(kind='bar', color='g')
+#failures by document type
+mb[(mb['result_doc'] == 1) & (mb['image_integrity_result'] == 1)]['document_type'].value_counts()[:10].plot(kind='bar', color='r')
+#failures by attempts
+mb.groupby(['user_id_doc'])['attempt_id'].count().reset_index(name='count')
+attempts = mb.groupby(['user_id_doc'])['attempt_id'].count().reset_index(name='count')
+attempts.groupby(['count'])['user_id_doc'].count()[:10].plot(kind='bar')
+
+#we analyze the past parameters on the suspected time
+suspect_data[suspect_data['image_integrity_result'] == 1]['issuing_country'].value_counts()[:10].plot(kind='bar', color='y')
+suspect_data[suspect_data['image_integrity_result'] == 1]['nationality'].value_counts()[:10].plot(kind='bar',color='g)
+suspect_data[suspect_data['image_integrity_result'] == 1]['document_type'].value_counts()[:10].plot(kind='bar', color='r')
+
+
+#we can conclude that the problematic stage of HYC is image_integrity_result which asserts if the document was sufficient quality to verify
+#the API Documentation of Veritas tells us that Expert review is required.
